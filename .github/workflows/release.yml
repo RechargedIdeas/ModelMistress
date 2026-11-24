@@ -20,7 +20,9 @@ jobs:
           fetch-depth: 1
           submodules: false
       - name: Engine sources the Linux build needs
-        run: git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+        run: |
+          git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+          git -C engines/stable-diffusion.cpp submodule update --init --recursive
       - name: Pack
         run: |
           set -euo pipefail
@@ -52,7 +54,9 @@ jobs:
           fetch-depth: 1
           submodules: false
       - name: Engine sources
-        run: git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+        run: |
+          git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+          git -C engines/stable-diffusion.cpp submodule update --init --recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
