@@ -76,7 +76,24 @@ jobs:
         run: npm ci && npm run build
       - name: Hub with the Vulkan engine
         shell: pwsh
-        run: cargo build --release -p model-mistress --features bundled-engine
+        run: |
+          $dir = $null
+          if ($env:VULKAN_SDK) {
+            $hit = Get-ChildItem -Path $env:VULKAN_SDK -Recurse -Filter "SPIRV-HeadersConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $dir = ($hit.DirectoryName -replace '\\','/') }
+          }
+          if (-not $dir) {
+            git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git C:\src\SPIRV-Headers
+            cmake -S C:\src\SPIRV-Headers -B C:\src\SPIRV-Headers\build -DCMAKE_INSTALL_PREFIX=C:/spirv
+            cmake --install C:\src\SPIRV-Headers\build
+            $hit = Get-ChildItem -Path C:\spirv -Recurse -Filter "SPIRV-HeadersConfig.cmake" | Select-Object -First 1
+            if (-not $hit) { throw "SPIRV-Headers installed but its cmake config was not found" }
+            $dir = ($hit.DirectoryName -replace '\\','/')
+          }
+          $env:MM_CMAKE_ARGS = "-DSPIRV-Headers_DIR=$dir"
+          echo "MM_CMAKE_ARGS=$env:MM_CMAKE_ARGS"
+          cargo build --release -p model-mistress --features bundled-engine
+
       - name: Sidecar and standalone hub
         shell: pwsh
         run: |
