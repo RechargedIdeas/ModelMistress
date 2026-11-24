@@ -82,6 +82,11 @@ model-mistress chat qwen3 "Hello"
 model-mistress mcp              # MCP over stdio, for agents
 ```
 
+Release [v0.4.3](https://github.com/RechargedIdeas/ModelMistress/releases/tag/v0.4.3) has the Windows installer
+(`ModelMistress_0.4.3_x64-setup.exe`, per-user) and `model-mistress-0.4.3-linux-src.tar.gz` (this tree plus the pinned
+llama.cpp and stable-diffusion.cpp sources). On Linux, unpack that archive and run the same `cargo build` as above.
+`MM_GGML_BACKEND=cpu` skips the Vulkan SDK. Rigel is not in the archive.
+
 The bundled build needs CMake, a C++ compiler (Visual Studio's on Windows) and, for the default Vulkan backend,
 the Vulkan SDK; `MM_GGML_BACKEND=cuda|hip|metal|cpu` picks another (see `src/build.rs`). Without the feature,
 ModelMistress uses a `llama-server` you name with `llama_server`, put in `<home>/engines/llama.cpp/`, or have on

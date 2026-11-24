@@ -1,0 +1,138 @@
+# Windows installer (NSIS + MSI + the hub) and a Linux source archive.
+# A tag push v* builds both, then publishes one GitHub release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-source:
+    name: Linux source archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+      - name: Engine sources the Linux build needs
+        run: git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+      - name: Pack
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          name="model-mistress-${ver}-linux-src"
+          stage="${RUNNER_TEMP}/${name}"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          tar --exclude-vcs --exclude target --exclude '**/node_modules' -cf - . | tar -C "$stage" -xf -
+          tar --exclude-vcs -C "${RUNNER_TEMP}" -czf "${name}.tar.gz" "$name"
+          sha256sum "${name}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-source
+          path: model-mistress-*-linux-src.tar.gz
+          if-no-files-found: error
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      # sd.cpp's nested build fails when this path is long (rc.exe RC2136).
+      CARGO_TARGET_DIR: C:\t
+      MM_GGML_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+      - name: Engine sources
+        run: git submodule update --init engines/llama.cpp engines/stable-diffusion.cpp
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+      - name: CMake and Ninja
+        shell: pwsh
+        run: |
+          cmake --version
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y
+          }
+          ninja --version
+      - name: Dashboard
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Hub with the Vulkan engine
+        shell: pwsh
+        run: cargo build --release -p model-mistress --features bundled-engine
+      - name: Sidecar and standalone hub
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME.Substring(1)
+          New-Item -ItemType Directory -Force desktop-app\binaries | Out-Null
+          Copy-Item C:\t\release\model-mistress.exe desktop-app\binaries\model-mistress-x86_64-pc-windows-msvc.exe
+          Copy-Item C:\t\release\model-mistress.exe "model-mistress-$ver-windows-x64-vulkan.exe"
+      - name: Tauri CLI
+        run: npm install -g @tauri-apps/cli@2
+      - name: NSIS and MSI
+        working-directory: desktop-app
+        shell: pwsh
+        run: tauri build --bundles nsis,msi
+      - name: Collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $ver = $env:GITHUB_REF_NAME.Substring(1)
+          Copy-Item "model-mistress-$ver-windows-x64-vulkan.exe" dist\
+          Copy-Item C:\t\release\bundle\nsis\*.exe dist\
+          Copy-Item C:\t\release\bundle\msi\*.msi dist\
+          Get-ChildItem dist | Select-Object -ExpandProperty Name
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [linux-source, windows-installer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          cd artifacts
+          sha256sum *.tar.gz *.exe *.msi | tee SHA256SUMS.txt
+          notes="${RUNNER_TEMP}/notes.md"
+          python3 "$GITHUB_WORKSPACE/.github/fill-release-notes.py" "$ver" "$notes" "$GITHUB_WORKSPACE/.github/RELEASE_NOTES.md" SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ModelMistress ${ver}: REA and ARTEX, Windows installer, Linux source" \
+            --notes-file "$notes" \
+            SHA256SUMS.txt \
+            *.tar.gz \
+            *.exe \
+            *.msi

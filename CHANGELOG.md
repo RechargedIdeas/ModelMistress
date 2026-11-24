@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased — custom fold on 0.4.2
+## 0.4.3 — 2026-11-24
 
-- **REA and ARTEX stay owner tools, and Misty can call them** (`src/artex.rs`, `src/mcp/rea_proxy.rs`, `src/client.rs`,
-  `src/misty/toolbox.rs`, `src/misty/agent.rs`). The base is LoopyLuci `main` (Misty, the thread budget, the GPU starter
-  set). The tools are not a second profile and the engines are not copied in.
+Custom fork of 0.4.2. REA and ARTEX stay owner tools, and Misty can call them.
+
+- **REA and ARTEX** (`src/artex.rs`, `src/mcp/rea_proxy.rs`, `src/client.rs`, `src/misty/toolbox.rs`,
+  `src/misty/agent.rs`). The base is LoopyLuci `main` (Misty, the thread budget, the GPU starter set). The tools are
+  not a second profile and the engines are not copied in.
   - *MCP and CLI.* `mcp --with-rea` / `MM_REA_PROXY=1` and `mcp --with-artex` / `MM_ARTEX=1`. Peer sessions get neither
     prefix. `model-mistress artex` calls the same functions as the `artex_` tools.
   - *Misty.* She runs in the hub, so start that process with `serve --with-rea` and `serve --with-artex` (the MCP flags
@@ -12,6 +14,8 @@
     that changes a task is class `hub`. A live REA tool is class `exec` and stays off the model's list while that
     policy is deny. She is offered the folded tools only when the request is about them. One REA child per hub
     process; it is not restarted after it dies.
+- **Release files.** A Windows installer (NSIS and MSI) and the hub alone, Vulkan, plus a Linux source archive that
+  includes the pinned llama.cpp and stable-diffusion.cpp trees. Rigel is not in the archive.
 
 ## 0.4.2 — 2026-11-23
 
