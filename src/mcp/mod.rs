@@ -4,6 +4,7 @@
 //! ModelMistress and Hermes Agent, as well as other agents.
 
 pub mod client;
+pub mod rea_proxy;
 pub mod server;
 
 pub use client::{McpClient, McpClientHandle};

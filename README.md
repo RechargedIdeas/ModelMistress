@@ -182,6 +182,18 @@ types, flash attention, prompt caching, batch sizes, chat template), the real co
 model in `GET /v1/models` (`serving`) and `model.loaded`, and a VRAM planner that refuses or unloads the least recently
 used model instead of letting a load spill: [docs/serving.md](docs/serving.md).
 
+This fork also folds two owner-only tools into the hub. [REA](docs/rea-integration.md) is a Node child (`rea_` tools).
+[ARTEX](docs/artex-integration.md) is reached over HTTP (`artex_` tools). Neither is copied into this tree. Peer MCP
+sessions and peer keys do not get them. Misty sees the same tools when the **hub** is started with them, because she
+runs inside that process:
+
+```bash
+MM_ARTEX_URL=http://127.0.0.1:8787 MM_ARTEX_TOKEN=... model-mistress serve --with-artex --with-rea
+```
+
+`mcp --with-rea` and `mcp --with-artex` attach them to that MCP process only. Misty's classes still apply: reads are
+`read`, an ARTEX call that changes a task is `hub` (ask), and a live REA tool is `exec` (deny until you allow it).
+
 ## Development
 
 `python ci/pipeline.py` runs everything a change must pass (rustfmt, clippy `-D warnings`, tests, a release build,

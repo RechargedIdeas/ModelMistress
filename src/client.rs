@@ -416,14 +416,64 @@ fn peer_tools() -> Vec<Value> {
 }
 
 /// Serve the hub's operations as MCP tools over stdio (JSON-RPC 2.0, one message per line), with the owner's token.
+/// When `MM_REA_PROXY=1` (or `mcp --with-rea`), REA's tools are appended as `rea_*` from one child process.
+/// When `MM_ARTEX=1` (or `mcp --with-artex`), ARTEX's control plane is appended as `artex_*`.
 pub async fn serve_mcp(hub: Client) -> Result<()> {
-    serve_mcp_io(McpAccess::Owner(&hub), std::io::stdin().lock(), std::io::stdout()).await
+    let rea = crate::mcp::rea_proxy::ReaProxy::attach_from_env();
+    let artex = crate::artex::ArtexLink::attach_from_env();
+    serve_mcp_session(
+        McpAccess::Owner(&hub),
+        std::io::stdin().lock(),
+        std::io::stdout(),
+        rea.as_ref(),
+        artex.as_ref(),
+    )
+    .await
 }
 
 /// The MCP loop over any line reader and writer: stdio for the CLI, buffers in the tests.
-pub async fn serve_mcp_io(access: McpAccess<'_>, input: impl BufRead, mut out: impl Write) -> Result<()> {
+pub async fn serve_mcp_io(access: McpAccess<'_>, input: impl BufRead, out: impl Write) -> Result<()> {
+    serve_mcp_session(access, input, out, None, None).await
+}
+
+fn mcp_tool_error(message: &str) -> Value {
+    json!({"content": [{"type": "text", "text": message}], "isError": true})
+}
+
+fn forward_rea(proxy: &crate::mcp::rea_proxy::ReaProxy, name: &str, args: Value) -> Value {
+    use crate::mcp::rea_proxy::{admit, bound_result, ReaProxy};
+    if let Err(message) = admit(name, proxy.runtime()) {
+        return mcp_tool_error(&message);
+    }
+    let raw = match proxy.call_tool(ReaProxy::strip_prefix(name), args) {
+        Ok(value) => value,
+        Err(err) => return mcp_tool_error(&format!("REA: {err:#}")),
+    };
+    match bound_result(&raw) {
+        Ok(value) => value,
+        Err(message) => mcp_tool_error(&message),
+    }
+}
+
+/// The MCP loop, with an optional REA child and an optional ARTEX engine already configured.
+/// A peer session never receives either fold. `serve_mcp_io` passes `None` for both.
+async fn serve_mcp_session(
+    access: McpAccess<'_>,
+    input: impl BufRead,
+    mut out: impl Write,
+    rea: Option<&crate::mcp::rea_proxy::ReaProxy>,
+    artex: Option<&crate::artex::ArtexLink>,
+) -> Result<()> {
+    let rea_tools = match (access, rea) {
+        (McpAccess::Owner(_), Some(proxy)) => proxy.visible_tools(),
+        _ => Vec::new(),
+    };
+    let artex_tools = match (access, artex) {
+        (McpAccess::Owner(_), Some(_)) => crate::artex::tools(),
+        _ => Vec::new(),
+    };
     // The owner's tools are the hub's operations; a peer key's tools are the two model routes.
-    let (instructions, tools, names) = match access {
+    let (mut instructions, mut tools, names) = match access {
         McpAccess::Owner(hub) => {
             let ops = hub.operations().await?;
             let tools: Vec<Value> = ops
@@ -442,10 +492,27 @@ pub async fn serve_mcp_io(access: McpAccess<'_>, input: impl BufRead, mut out: i
                 .iter()
                 .filter_map(|o| o["id"].as_str().map(|id| (tool_name(id), id.to_string())))
                 .collect();
-            (MCP_INSTRUCTIONS, tools, names)
+            (MCP_INSTRUCTIONS.to_string(), tools, names)
         }
-        McpAccess::Peer(_) => (PEER_MCP_INSTRUCTIONS, peer_tools(), Vec::new()),
+        McpAccess::Peer(_) => (PEER_MCP_INSTRUCTIONS.to_string(), peer_tools(), Vec::new()),
     };
+    if !rea_tools.is_empty() {
+        instructions.push_str(
+            " Tools named rea_ are REA, forwarded to one child for this session. Cite evidence_id. \
+             A result over the size budget is refused whole, not truncated. Runtime, capture, and \
+             extract tools are omitted unless MM_REA_RUNTIME=1.",
+        );
+        tools.extend(rea_tools);
+    }
+    if !artex_tools.is_empty() {
+        instructions.push_str(
+            " Tools named artex_ are ARTEX, folded into this hub. A task goal must name a target \
+             the operator is allowed to test. target_gate is forced on. Credentials are refused. \
+             Cite recorded finding ids; do not invent findings. A result over the size budget is \
+             refused whole, not truncated.",
+        );
+        tools.extend(artex_tools);
+    }
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -483,31 +550,56 @@ pub async fn serve_mcp_io(access: McpAccess<'_>, input: impl BufRead, mut out: i
                 } else {
                     msg["params"]["arguments"].clone()
                 };
-                let outcome = match access {
-                    McpAccess::Owner(hub) => match names.iter().find(|(n, _)| *n == name) {
-                        Some((_, op)) => Some(hub.call(op, args).await),
-                        None => None,
-                    },
-                    McpAccess::Peer(peer) => match name.as_str() {
-                        "models_list" => Some(peer.peer_models().await),
-                        "chat_complete" => Some(
-                            peer.peer_chat(
-                                args["model"].as_str().unwrap_or(""),
-                                args["prompt"].as_str().unwrap_or(""),
-                                args["max_tokens"].as_u64(),
-                            )
-                            .await,
-                        ),
-                        _ => None,
-                    },
-                };
-                match outcome {
-                    None => Err((-32602, format!("no tool {name}"))),
-                    Some(Ok(v)) => Ok(
-                        json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v)?}],
+                if crate::artex::is_artex_tool(&name) {
+                    match (access, artex) {
+                        (McpAccess::Owner(_), Some(link)) => {
+                            let link = link.clone();
+                            let called = name;
+                            match tokio::task::spawn_blocking(move || link.dispatch(&called, &args)).await {
+                                Ok(Ok(value)) => Ok(json!({
+                                    "content": [{"type": "text", "text": serde_json::to_string_pretty(&value)?}],
+                                    "isError": false
+                                })),
+                                Ok(Err(message)) => Ok(mcp_tool_error(&message)),
+                                Err(err) => Ok(mcp_tool_error(&err.to_string())),
+                            }
+                        }
+                        _ => Err((-32602, format!("no tool {name}"))),
+                    }
+                } else if crate::mcp::rea_proxy::ReaProxy::is_rea_tool(&name) {
+                    match (access, rea) {
+                        (McpAccess::Owner(_), Some(proxy)) => Ok(forward_rea(proxy, &name, args)),
+                        _ => Err((-32602, format!("no tool {name}"))),
+                    }
+                } else {
+                    let outcome = match access {
+                        McpAccess::Owner(hub) => match names.iter().find(|(n, _)| *n == name) {
+                            Some((_, op)) => Some(hub.call(op, args).await),
+                            None => None,
+                        },
+                        McpAccess::Peer(peer) => match name.as_str() {
+                            "models_list" => Some(peer.peer_models().await),
+                            "chat_complete" => Some(
+                                peer.peer_chat(
+                                    args["model"].as_str().unwrap_or(""),
+                                    args["prompt"].as_str().unwrap_or(""),
+                                    args["max_tokens"].as_u64(),
+                                )
+                                .await,
+                            ),
+                            _ => None,
+                        },
+                    };
+                    match outcome {
+                        None => Err((-32602, format!("no tool {name}"))),
+                        Some(Ok(v)) => Ok(
+                            json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v)?}],
                                              "isError": false}),
-                    ),
-                    Some(Err(e)) => Ok(json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true})),
+                        ),
+                        Some(Err(e)) => {
+                            Ok(json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true}))
+                        }
+                    }
                 }
             }
             _ => Err((-32601, format!("no method {method}"))),
@@ -678,6 +770,133 @@ mod tests {
             replies[2]["error"]["code"], -32602,
             "owner tools are not on a peer key's server"
         );
+    }
+
+    #[tokio::test]
+    async fn folded_tools_reach_the_owner_session_and_never_a_peer() {
+        std::env::remove_var("MM_ARTEX");
+        assert!(crate::artex::ArtexLink::attach_from_env().is_none());
+        std::env::set_var("MM_ARTEX", "1");
+        std::env::set_var("MM_ARTEX_URL", "http://127.0.0.1:1");
+        std::env::set_var("MM_ARTEX_TOKEN", "test-token");
+        let attached = crate::artex::ArtexLink::attach_from_env();
+        std::env::remove_var("MM_ARTEX");
+        std::env::remove_var("MM_ARTEX_URL");
+        std::env::remove_var("MM_ARTEX_TOKEN");
+        let link = attached.expect("MM_ARTEX=1 with a url and token attaches");
+
+        let home = crate::testing::temp_home();
+        let hub = crate::testing::hub(&home, &["alpha"]);
+        let (addr, _task) = crate::testing::serve(hub).await;
+        let client = Client::new(&format!("http://{addr}"), crate::testing::TOKEN);
+        let owner_input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"artex_status\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"rea_analyze_javascript_application\"}}\n",
+        );
+        let mut out = Vec::new();
+        serve_mcp_session(McpAccess::Owner(&client), owner_input.as_bytes(), &mut out, None, None)
+            .await
+            .unwrap();
+        let off: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let off_names = tool_names(&off[0]);
+        assert!(
+            off_names
+                .iter()
+                .all(|n| !n.starts_with("artex_") && !n.starts_with("rea_")),
+            "{off_names:?}"
+        );
+        assert_eq!(off[1]["error"]["code"], -32602);
+        assert_eq!(off[2]["error"]["code"], -32602);
+
+        let mut out = Vec::new();
+        serve_mcp_session(
+            McpAccess::Owner(&client),
+            owner_input.as_bytes(),
+            &mut out,
+            None,
+            Some(&link),
+        )
+        .await
+        .unwrap();
+        let on: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let on_names = tool_names(&on[0]);
+        assert!(
+            on_names.contains(&"artex_status") && on_names.contains(&"service_status"),
+            "{on_names:?}"
+        );
+        assert!(on[0]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| { t["name"].as_str().map(|n| !n.starts_with("rea_")).unwrap_or(true) }));
+        assert_eq!(
+            on[1]["result"]["isError"], true,
+            "the call reached dispatch and the engine refused"
+        );
+        assert!(on[1]["error"].is_null());
+        assert_eq!(
+            on[2]["error"]["code"], -32602,
+            "REA is absent until a child is attached"
+        );
+
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/mcp/testdata/rea_fixture.mjs"));
+        let proxy = crate::mcp::rea_proxy::ReaProxy::from_command_stdio(cmd, false, std::process::Stdio::null())
+            .expect("the REA fixture starts");
+        let mut out = Vec::new();
+        serve_mcp_session(
+            McpAccess::Owner(&client),
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n".as_bytes(),
+            &mut out,
+            Some(&proxy),
+            Some(&link),
+        )
+        .await
+        .unwrap();
+        let both: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
+        let both_names = tool_names(&both);
+        assert!(
+            both_names.contains(&"rea_analyze_javascript_application") && both_names.contains(&"artex_task_create"),
+            "{both_names:?}"
+        );
+
+        let peer = Client::new(&format!("http://{addr}"), "not-a-peer-key");
+        let mut out = Vec::new();
+        serve_mcp_session(
+            McpAccess::Peer(&peer),
+            owner_input.as_bytes(),
+            &mut out,
+            Some(&proxy),
+            Some(&link),
+        )
+        .await
+        .unwrap();
+        let peer_replies: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(tool_names(&peer_replies[0]), vec!["models_list", "chat_complete"]);
+        assert_eq!(peer_replies[1]["error"]["code"], -32602);
+        assert_eq!(peer_replies[2]["error"]["code"], -32602);
+    }
+
+    fn tool_names(reply: &Value) -> Vec<&str> {
+        reply["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect()
     }
 
     #[test]

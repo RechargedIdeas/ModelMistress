@@ -303,19 +303,34 @@ fn offered(cfg: &Config, req: &Req) -> Vec<toolbox::ToolSpec> {
         })
         .collect();
     // A caller that named its tools gets exactly those; otherwise a request that is plainly about one kind of thing
-    // is offered that kind of tool only.
+    // is offered that kind of tool only. REA and ARTEX stay out of the unfocused list: their definitions are long,
+    // and a request that is not about them should not make the 9B read them.
     if req.tools.is_none() {
+        let mut picked: Vec<toolbox::ToolSpec> = Vec::new();
         if let Some(names) = focus(&req.input) {
-            let narrowed: Vec<toolbox::ToolSpec> = all.iter().filter(|s| names.contains(&s.name)).cloned().collect();
-            if !narrowed.is_empty() {
-                return narrowed;
+            picked.extend(all.iter().filter(|s| names.contains(&s.name)).cloned());
+        }
+        if rea_request(&req.input) {
+            for spec in &all {
+                if spec.name.starts_with("rea_") && !picked.iter().any(|p| p.name == spec.name) {
+                    picked.push(spec.clone());
+                }
             }
         }
+        if !picked.is_empty() {
+            return picked;
+        }
+        return all
+            .into_iter()
+            .filter(|s| !s.name.starts_with("rea_") && !s.name.starts_with("artex_"))
+            .collect();
     }
     all
 }
 
-/// The tools a request is plainly about, or `None` when its words do not say (then every tool is offered).
+/// The tools a request is plainly about, or `None` when its words do not say.
+/// An unfocused request is offered every built-in tool, but not REA or ARTEX: those are offered only when the
+/// words name them (see `offered`).
 ///
 /// Every definition is prompt text the model must read before it answers, and on this CPU the 9B reads about 30
 /// tokens a second: all fifteen definitions are some 1,000 tokens, over half a minute. Needle also scores a right
@@ -381,7 +396,38 @@ fn focus(text: &str) -> Option<Vec<&'static str>> {
     if has(&["shell", "terminal", "run the command", "execute"]) {
         add(&["shell_run"]);
     }
+    if has(&["artex", "findings", "targetless", "target gate", "in-scope", "scope"]) {
+        add(&[
+            "artex_status",
+            "artex_tasks",
+            "artex_task",
+            "artex_scope",
+            "artex_scope_add",
+            "artex_findings",
+            "artex_control",
+            "artex_task_create",
+            "artex_bind_model",
+        ]);
+    }
     (!names.is_empty()).then_some(names)
+}
+
+/// A request about REA. The tool names come from the child, so they are not in `focus`. "rea" alone is not a
+/// match: it sits inside ordinary words.
+fn rea_request(text: &str) -> bool {
+    let t = text.to_lowercase();
+    [
+        "reverse engineer",
+        "reverse-engineer",
+        "decompil",
+        "disassembl",
+        "ghidra",
+        "firmware",
+        "evidence_id",
+        "rea_",
+    ]
+    .iter()
+    .any(|w| t.contains(w))
 }
 
 /// A request for arithmetic: a sum, a percentage, or the words for one. A small model gets these wrong (the 2B
@@ -1653,6 +1699,13 @@ pub mod tests {
         // no clear kind: nothing is held back
         assert!(focus("who is the release manager of Falcon?").is_none());
         assert!(focus("hello there").is_none());
+        let artex = names("show the artex findings");
+        assert!(artex.contains(&"artex_findings") && artex.contains(&"artex_scope"));
+        assert!(names("list the files in notes")
+            .iter()
+            .all(|n| !n.starts_with("artex_")));
+        assert!(rea_request("decompile this firmware"));
+        assert!(!rea_request("hello there") && !rea_request("read the notes"));
         // the offer is the narrowed set, unless the caller named its tools
         let cfg = Config::default();
         let req = |input: &str, tools: Option<Vec<String>>| Req {

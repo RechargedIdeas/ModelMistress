@@ -147,6 +147,21 @@ Misty can use these tools. Each belongs to a class, and the policy decides what 
 | `net` | `web_fetch` | **deny** |
 | `hub` | `hub_status`, `models_list`, `model_load`, `model_unload` | **ask** |
 
+On this fork, two more groups appear when the **hub** was started with them (`serve --with-rea`, `serve --with-artex`,
+or the same variables in that process). `mcp --with-rea` does not add them to a hub that is already running.
+
+| When | Tools | Class |
+| --- | --- | --- |
+| `MM_ARTEX=1` and the URL and token are set | `artex_status`, `artex_tasks`, `artex_task`, `artex_scope`, `artex_findings` | `read` |
+| same | `artex_scope_add`, `artex_control`, `artex_task_create`, `artex_bind_model` | `hub` |
+| `MM_REA_PROXY=1` and the child started | static `rea_` tools REA marks read-only | `read` |
+| same | other static `rea_` tools | `hub` |
+| `MM_REA_RUNTIME=1` as well | capture, extract, and trace `rea_` tools | `exec` |
+
+She is not handed those definitions on every request. ARTEX is offered when the request mentions ARTEX, scope, or
+findings. REA is offered when it mentions reverse engineering, decompilation, disassembly, firmware, Ghidra, or an
+evidence id. The REA child is one for the whole hub. If it dies, it is not started again.
+
 ```bash
 model-mistress misty tools              # every tool, its class and the policy that applies
 model-mistress misty policy             # the policy

@@ -4,6 +4,10 @@ Updated 2026-10-28 at repository commit 8409cd6. The measurements below were tak
 RX 7900 XTX and the built-in llama.cpp (commit 7fee178, Vulkan), unless a section says otherwise. On 2026-10-28 the
 pipeline's test stage passed (398 tests), and the pipeline's smoke test passed against the built binary.
 
+This fork's `main` is that line plus upstream through Misty (0.4.2) and the owner-only REA and ARTEX fold. The fold is
+not part of the measurements above. What it does, and what is still unproven against a live ARTEX process, is
+[HANDOVER.md](../HANDOVER.md).
+
 ## Hub wedge, watchdog and placement (2026-11-22)
 
 A llama-server that exited while loading (GPU out of memory, a driver crash) deadlocked the load thread and silenced the

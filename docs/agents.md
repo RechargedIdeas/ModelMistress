@@ -20,6 +20,10 @@ whether the hub or an offline command made it. **Done now:** an MCP server that 
 
 ## Other gaps found while checking
 
+- **Owner folds.** REA (`rea_`) and ARTEX (`artex_`) are on the owner's MCP session and, when the hub was started with
+  `serve --with-rea` / `serve --with-artex`, on Misty's tool list under the existing classes. A peer MCP session and a
+  peer key get neither. See [rea-integration.md](rea-integration.md), [artex-integration.md](artex-integration.md) and
+  [HANDOVER.md](../HANDOVER.md).
 - **MCP stdio hang (fixed).** A hub started by `mcp --start` inherited the MCP process's stdout pipe, so an MCP client
   would have waited for the hub to exit. The standard handles are now made non-inheritable before the hub starts.
 - **Tool count.** The MCP server exposes every hub operation (94 tools). That costs an agent context on every turn. A

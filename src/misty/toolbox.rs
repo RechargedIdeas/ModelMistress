@@ -7,6 +7,7 @@
 
 use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -43,7 +44,7 @@ impl Class {
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolSpec {
     pub name: &'static str,
-    pub description: &'static str,
+    pub description: String,
     pub class: Class,
     pub parameters: Value,
 }
@@ -55,16 +56,25 @@ impl ToolSpec {
     }
 }
 
-fn spec(name: &'static str, class: Class, description: &'static str, props: Value, required: &[&str]) -> ToolSpec {
+fn spec(name: &'static str, class: Class, description: &str, props: Value, required: &[&str]) -> ToolSpec {
     ToolSpec {
         name,
-        description,
+        description: description.to_string(),
         class,
         parameters: json!({"type": "object", "properties": props, "required": required}),
     }
 }
 
 pub fn specs() -> Vec<ToolSpec> {
+    let mut tools = builtin_specs();
+    tools.extend(artex_specs());
+    if let Some(fold) = rea_fold() {
+        tools.extend(fold.specs.iter().cloned());
+    }
+    tools
+}
+
+fn builtin_specs() -> Vec<ToolSpec> {
     let s = |d: &str| json!({"type": "string", "description": d});
     vec![
         spec(
@@ -191,6 +201,127 @@ pub fn specs() -> Vec<ToolSpec> {
 
 pub fn find(name: &str) -> Option<ToolSpec> {
     specs().into_iter().find(|s| s.name == name)
+}
+
+// ---- REA and ARTEX ----------------------------------------------------------------------------------------------
+//
+// Misty runs inside the hub process, so she sees these only when that process was started with the flags
+// (`serve --with-rea`, `serve --with-artex`, or the same environment variables). One REA child is kept for the
+// life of the process. A dead child is not started again: its evidence ids died with it.
+//
+// Reads stay `read` (auto). An ARTEX call that changes a task is `hub` (ask), so a caller limited to read cannot
+// make one. A live REA tool is `exec` (deny until the owner turns that class on).
+
+fn fold_class(name: &str, read_only: bool) -> Class {
+    if crate::mcp::rea_proxy::is_runtime_name(name) {
+        Class::Exec
+    } else if read_only {
+        Class::Read
+    } else {
+        Class::Hub
+    }
+}
+
+fn static_artex_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "artex_status" => "artex_status",
+        "artex_tasks" => "artex_tasks",
+        "artex_task" => "artex_task",
+        "artex_scope" => "artex_scope",
+        "artex_scope_add" => "artex_scope_add",
+        "artex_findings" => "artex_findings",
+        "artex_control" => "artex_control",
+        "artex_task_create" => "artex_task_create",
+        "artex_bind_model" => "artex_bind_model",
+        _ => return None,
+    })
+}
+
+fn artex_specs() -> Vec<ToolSpec> {
+    if std::env::var("MM_ARTEX").ok().as_deref() != Some("1") {
+        return Vec::new();
+    }
+    if crate::artex::ArtexLink::from_env().is_err() {
+        return Vec::new();
+    }
+    crate::artex::tools()
+        .into_iter()
+        .filter_map(|tool| {
+            let name = static_artex_name(tool["name"].as_str()?)?;
+            let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap_or(false);
+            Some(ToolSpec {
+                name,
+                description: tool["description"].as_str().unwrap_or("ARTEX tool").to_string(),
+                class: fold_class(name, read_only),
+                parameters: tool
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+            })
+        })
+        .collect()
+}
+
+struct ReaFold {
+    proxy: crate::mcp::rea_proxy::ReaProxy,
+    specs: Vec<ToolSpec>,
+}
+
+fn rea_spec(tool: &Value) -> Option<ToolSpec> {
+    let raw = tool["name"].as_str()?;
+    let name: &'static str = Box::leak(raw.to_string().into_boxed_str());
+    let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap_or(false);
+    Some(ToolSpec {
+        name,
+        description: tool["description"].as_str().unwrap_or("REA tool").to_string(),
+        class: fold_class(name, read_only),
+        parameters: tool
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+    })
+}
+
+/// The hub's one REA child. The first call starts it; a failure stays a failure so a later call cannot
+/// replace the evidence ledger with a new one.
+fn rea_fold() -> Option<&'static ReaFold> {
+    static REA: OnceLock<Option<ReaFold>> = OnceLock::new();
+    REA.get_or_init(|| {
+        let proxy = crate::mcp::rea_proxy::ReaProxy::attach_from_env()?;
+        let specs = proxy.visible_tools().iter().filter_map(rea_spec).collect();
+        Some(ReaFold { proxy, specs })
+    })
+    .as_ref()
+}
+
+async fn run_artex(name: &str, a: &Value) -> Result<Value, String> {
+    let link = crate::artex::ArtexLink::from_env()?;
+    let name = name.to_string();
+    let args = a.clone();
+    match tokio::task::spawn_blocking(move || link.dispatch(&name, &args)).await {
+        Ok(result) => result,
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+async fn run_rea(name: &str, a: &Value) -> Result<Value, String> {
+    let fold = rea_fold()
+        .ok_or_else(|| "REA is not attached. Start the hub with MM_REA_PROXY=1 or serve --with-rea.".to_string())?;
+    let proxy: &'static crate::mcp::rea_proxy::ReaProxy = &fold.proxy;
+    let name = name.to_string();
+    let args = a.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::mcp::rea_proxy::admit(&name, proxy.runtime())?;
+        let raw = proxy
+            .call_tool(crate::mcp::rea_proxy::ReaProxy::strip_prefix(&name), args)
+            .map_err(|err| format!("REA: {err:#}"))?;
+        crate::mcp::rea_proxy::bound_result(&raw)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 // ---- guards ------------------------------------------------------------------------------------------------------
@@ -690,6 +821,8 @@ pub async fn run(
             let seen = misty.cactus.describe(&rgb, w, h, None)?;
             Ok(json!({"description": super::cactus::digest(&seen)}))
         }
+        other if crate::artex::is_artex_tool(other) => run_artex(other, a).await,
+        other if crate::mcp::rea_proxy::ReaProxy::is_rea_tool(other) => run_rea(other, a).await,
         other => Err(format!("no tool named {other}")),
     }
 }
@@ -950,5 +1083,31 @@ mod tests {
                 .len(),
             specs().len()
         );
+    }
+
+    #[test]
+    fn folded_tools_take_the_class_their_side_effects_need() {
+        assert_eq!(fold_class("artex_status", true), Class::Read);
+        assert_eq!(fold_class("artex_findings", true), Class::Read);
+        assert_eq!(fold_class("artex_task_create", false), Class::Hub);
+        assert_eq!(fold_class("artex_scope_add", false), Class::Hub);
+        assert_eq!(fold_class("artex_bind_model", false), Class::Hub);
+        assert_eq!(fold_class("rea_inspect_binary", true), Class::Read);
+        assert_eq!(fold_class("rea_analyze_calls", false), Class::Hub);
+        assert_eq!(fold_class("rea_capture_process_scenario", true), Class::Exec);
+        assert_eq!(fold_class("rea_extract_firmware", false), Class::Exec);
+        for tool in crate::artex::tools() {
+            let name = tool["name"].as_str().unwrap();
+            assert!(static_artex_name(name).is_some(), "{name} has no Misty class");
+            let read_only = tool["annotations"]["readOnlyHint"].as_bool().unwrap_or(false);
+            let class = fold_class(name, read_only);
+            if read_only {
+                assert_eq!(class, Class::Read, "{name}");
+            } else {
+                assert_eq!(class, Class::Hub, "{name}");
+            }
+        }
+        std::env::remove_var("MM_ARTEX");
+        assert!(artex_specs().is_empty());
     }
 }

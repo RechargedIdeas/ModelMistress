@@ -35,6 +35,12 @@ enum Cmd {
         /// Port (0 = a free one).
         #[arg(long, default_value_t = 0)]
         port: u16,
+        /// Let Misty call REA. Same switch as `MM_REA_PROXY=1`. One child for this process.
+        #[arg(long)]
+        with_rea: bool,
+        /// Let Misty call ARTEX. Needs `MM_ARTEX_URL` and `MM_ARTEX_TOKEN`, then sets `MM_ARTEX=1`.
+        #[arg(long)]
+        with_artex: bool,
     },
     /// Is the hub running? What is loaded?
     Status,
@@ -244,6 +250,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ForgeCmd,
     },
+    /// ARTEX's control plane, folded in. The engine stays its own process.
+    Artex {
+        #[command(subcommand)]
+        cmd: ArtexCmd,
+    },
     /// Serve the operations as MCP tools over stdio. The hub must be running, or pass `--start` to start one in the
     /// background; it keeps running after this exits (`stop` ends it).
     Mcp {
@@ -253,6 +264,78 @@ enum Cmd {
         /// Serve only the model routes, with a peer key from MODELMISTRESS_KEY: `models_list` and `chat_complete`.
         #[arg(long)]
         peer: bool,
+        /// Also serve REA tools, prefixed `rea_`, from one child `rea mcp` process.
+        /// Static inspect and analyze tools only, unless `MM_REA_RUNTIME=1`.
+        /// Same switch as the `MM_REA_PROXY=1` environment variable.
+        #[arg(long)]
+        with_rea: bool,
+        /// Also serve ARTEX tools, prefixed `artex_`. Needs MM_ARTEX_URL and MM_ARTEX_TOKEN.
+        #[arg(long)]
+        with_artex: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtexCmd {
+    /// JSON profile and environment for ARTEX's OpenAI provider (`/v1/chat/completions`).
+    Profile {
+        /// Model id ARTEX should call.
+        model: String,
+        /// Hub URL. Default: the url in the home's control.json. The owner token there is not copied.
+        #[arg(long)]
+        url: Option<String>,
+        /// Peer key for this model. Also read from MODELMISTRESS_KEY. Not the owner token.
+        #[arg(long)]
+        key: Option<String>,
+        /// Model context window in K tokens. Omit it and ARTEX assumes 200.
+        #[arg(long)]
+        context_k: Option<u32>,
+    },
+    /// Engine readiness. Needs MM_ARTEX_URL and MM_ARTEX_TOKEN.
+    Status,
+    /// List tasks. Needs MM_ARTEX_URL and MM_ARTEX_TOKEN.
+    Tasks,
+    /// One task.
+    Task { id: String },
+    /// Findings, one page. Optionally one task (`task_id`, not `task`).
+    Findings {
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Scope rows for one task.
+    Scope { id: String },
+    /// Add one host to a task's scope. kind is root_domain, subdomain, ip, or cidr.
+    ScopeAdd {
+        id: String,
+        kind: String,
+        value: String,
+        reason: String,
+    },
+    /// Pause or resume a task.
+    Control {
+        id: String,
+        /// `pause` or `resume`.
+        action: String,
+    },
+    /// Create a task. The goal must name an allowed target. target_gate is forced on.
+    TaskCreate {
+        description: String,
+        goal: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Save this hub as ARTEX's OpenAI profile named ModelMistress, then activate it.
+    Bind {
+        model: String,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        context_k: u32,
+        /// Pin the profile on this task after it is activated.
+        #[arg(long)]
+        task: Option<String>,
     },
 }
 
@@ -432,6 +515,8 @@ fn main() {
             args.cmd.unwrap_or(Cmd::Serve {
                 host: [127, 0, 0, 1].into(),
                 port: 0,
+                with_rea: false,
+                with_artex: false,
             }),
             home,
         )
@@ -447,6 +532,126 @@ fn main() {
     std::process::exit(code);
 }
 
+/// `serve` and `mcp` share these switches. Misty runs inside the hub, so `serve --with-artex` is what puts the
+/// tools on her list. `mcp --with-artex` only affects that MCP process.
+fn enable_owner_folds(with_rea: bool, with_artex: bool) -> anyhow::Result<()> {
+    if with_rea {
+        std::env::set_var("MM_REA_PROXY", "1");
+    }
+    if with_artex {
+        if std::env::var("MM_ARTEX_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_none()
+            || std::env::var("MM_ARTEX_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_none()
+        {
+            anyhow::bail!("--with-artex needs MM_ARTEX_URL and MM_ARTEX_TOKEN");
+        }
+        std::env::set_var("MM_ARTEX", "1");
+    }
+    Ok(())
+}
+
+fn hub_url_from_home(home: &std::path::Path, url: Option<String>) -> anyhow::Result<String> {
+    match url {
+        Some(url) => Ok(url),
+        None => {
+            let path = home.join("control.json");
+            let bytes = std::fs::read(&path).map_err(|_| {
+                anyhow::anyhow!(
+                    "no --url, and {} was not readable. Start the hub, or pass --url.",
+                    path.display()
+                )
+            })?;
+            model_mistress::artex::url_from_control(&String::from_utf8_lossy(&bytes))
+                .map_err(|err| anyhow::anyhow!(err))
+        }
+    }
+}
+
+fn artex_cmd(home: &std::path::Path, cmd: ArtexCmd) -> anyhow::Result<()> {
+    match cmd {
+        ArtexCmd::Profile {
+            model,
+            url,
+            key,
+            context_k,
+        } => {
+            let hub_url = hub_url_from_home(home, url)?;
+            let key = key.or_else(|| std::env::var("MODELMISTRESS_KEY").ok());
+            let profile = model_mistress::artex::openai_profile(&model_mistress::artex::ArtexRequest {
+                hub_url,
+                model,
+                api_key: key,
+                context_window_k: context_k,
+            })
+            .map_err(|err| anyhow::anyhow!(err))?;
+            eprintln!("model-mistress: ARTEX profile. Creating a task through the hub forces target_gate on.");
+            show(&profile);
+        }
+        other => {
+            let link = model_mistress::artex::ArtexLink::from_env().map_err(|err| anyhow::anyhow!(err))?;
+            let value = match other {
+                ArtexCmd::Status => link.dispatch("artex_status", &json!({})),
+                ArtexCmd::Tasks => link.dispatch("artex_tasks", &json!({})),
+                ArtexCmd::Task { id } => link.dispatch("artex_task", &json!({"id": id})),
+                ArtexCmd::Findings { task } => {
+                    let mut args = json!({});
+                    if let Some(task) = task {
+                        args["task_id"] = json!(task);
+                    }
+                    link.dispatch("artex_findings", &args)
+                }
+                ArtexCmd::Scope { id } => link.dispatch("artex_scope", &json!({"id": id})),
+                ArtexCmd::ScopeAdd {
+                    id,
+                    kind,
+                    value,
+                    reason,
+                } => link.dispatch(
+                    "artex_scope_add",
+                    &json!({"id": id, "kind": kind, "value": value, "reason": reason}),
+                ),
+                ArtexCmd::Control { id, action } => {
+                    link.dispatch("artex_control", &json!({"id": id, "action": action}))
+                }
+                ArtexCmd::TaskCreate {
+                    description,
+                    goal,
+                    name,
+                } => link.dispatch(
+                    "artex_task_create",
+                    &json!({"description": description, "goal": goal, "name": name.unwrap_or_default()}),
+                ),
+                ArtexCmd::Bind {
+                    model,
+                    url,
+                    key,
+                    context_k,
+                    task,
+                } => {
+                    let hub_url = hub_url_from_home(home, url)?;
+                    let key = key
+                        .or_else(|| std::env::var("MODELMISTRESS_KEY").ok())
+                        .ok_or_else(|| anyhow::anyhow!("pass --key or set MODELMISTRESS_KEY to a peer key"))?;
+                    let mut args = json!({"hub_url": hub_url, "model": model, "api_key": key, "context_k": context_k});
+                    if let Some(task) = task {
+                        args["task_id"] = json!(task);
+                    }
+                    link.dispatch("artex_bind_model", &args)
+                }
+                ArtexCmd::Profile { .. } => unreachable!("profile is handled above"),
+            }
+            .map_err(|err| anyhow::anyhow!(err))?;
+            show(&value);
+        }
+    }
+    Ok(())
+}
+
 fn show(v: &Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
@@ -454,7 +659,13 @@ fn show(v: &Value) {
 async fn run(cmd: Cmd, home: PathBuf) -> anyhow::Result<()> {
     let client = || Client::find(Some(home.clone()));
     match cmd {
-        Cmd::Serve { host, port } => {
+        Cmd::Serve {
+            host,
+            port,
+            with_rea,
+            with_artex,
+        } => {
+            enable_owner_folds(with_rea, with_artex)?;
             std::fs::create_dir_all(&home)?;
             let settings = Settings::load(&home).map_err(anyhow::Error::msg)?;
             let watchdog_s = settings.watchdog_s;
@@ -1050,7 +1261,14 @@ async fn run(cmd: Cmd, home: PathBuf) -> anyhow::Result<()> {
                 ForgeCmd::Unload { model } => show(&c.call("forge.unload", json!({"model": model})).await?),
             }
         }
-        Cmd::Mcp { start, peer } => {
+        Cmd::Artex { cmd } => artex_cmd(&home, cmd)?,
+        Cmd::Mcp {
+            start,
+            peer,
+            with_rea,
+            with_artex,
+        } => {
+            enable_owner_folds(with_rea, with_artex)?;
             let hub = match client().await {
                 Ok(hub) => hub,
                 Err(_) if start => {
@@ -1060,6 +1278,12 @@ async fn run(cmd: Cmd, home: PathBuf) -> anyhow::Result<()> {
                 Err(e) => return Err(e),
             };
             if peer {
+                if with_rea {
+                    eprintln!("model-mistress: REA tools are not served on a peer key. Start mcp without --peer.");
+                }
+                if with_artex {
+                    eprintln!("model-mistress: ARTEX tools are not served on a peer key. Start mcp without --peer.");
+                }
                 let key = std::env::var("MODELMISTRESS_KEY").map_err(|_| {
                     anyhow::anyhow!(
                         "--peer needs a peer key in MODELMISTRESS_KEY (`model-mistress keys create <name>`)"
