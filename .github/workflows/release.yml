@@ -110,7 +110,8 @@ jobs:
       - name: NSIS and MSI
         working-directory: desktop-app
         shell: pwsh
-        run: tauri build --bundles nsis,msi
+        # PowerShell treats a comma as an array, so `nsis,msi` is one rejected value.
+        run: tauri build --bundles nsis --bundles msi
       - name: Collect
         shell: pwsh
         run: |
