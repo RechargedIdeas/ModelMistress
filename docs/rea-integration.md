@@ -33,6 +33,10 @@ A result bigger than 48 KB is refused whole. The error names `evidence_id` when 
 
 Registering REA as its own MCP server still works. Prefer the single process so the evidence ledger and the model tools share a session.
 
+## Not on the phone
+
+The Android app does not start a REA child, and it does not offer `rea_` tools. A paired desktop's peer key cannot call them either. The desktop owner token is loopback-only, and sending it through the overlay would make the hub treat the phone as local, so the phone does not store that token. REA stays on the desktop hub: `model-mistress serve --with-rea`.
+
 ## What this enables
 
 - One MCP process serves the local models and the `rea_` tools. The agent does not need a second server.

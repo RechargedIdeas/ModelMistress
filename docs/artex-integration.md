@@ -64,6 +64,14 @@ model-mistress artex bind qwen3:8b --key <peer-key> --context-k 32 --task <id>
 
 The library tests prove these shapes against a stand-in. They do not prove a running ARTEX. The next check is in [../HANDOVER.md](../HANDOVER.md).
 
+## On the phone
+
+The full Android app (`com.modelmistress.app`) calls this same engine. It does not go through the paired desktop, and it does not use the desktop's owner token. In Models, under ARTEX, save `http://` and the engine's session token. They stay on the phone, in plain text, like the Hugging Face token. Misty must be on. The nine tools are then offered only when the question is about ARTEX, scope, or findings.
+
+Read-only tools run at once while Tool use is On. `artex_scope_add`, `artex_control`, `artex_task_create`, and `artex_bind_model` are hub actions: they ask while Tool use is On, and they run at once while Tool use is Full auto. `artex_bind_model`'s `api_key` is still a peer key for the hub ARTEX will call. The phone does not fill that in from its own server key.
+
+The router app does not show these fields and does not run the tools. REA is not on either app.
+
 ## REA is not this
 
 `rea_` tools are static evidence. `artex_` tools are the authorized task loop. One does not authorize the other.

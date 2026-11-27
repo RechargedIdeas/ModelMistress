@@ -4,9 +4,9 @@ Updated 2026-10-28 at repository commit 8409cd6. The measurements below were tak
 RX 7900 XTX and the built-in llama.cpp (commit 7fee178, Vulkan), unless a section says otherwise. On 2026-10-28 the
 pipeline's test stage passed (398 tests), and the pipeline's smoke test passed against the built binary.
 
-This fork's `main` is that line plus upstream through Misty (0.4.2) and the owner-only REA and ARTEX fold. The fold is
-not part of the measurements above. What it does, and what is still unproven against a live ARTEX process, is
-[HANDOVER.md](../HANDOVER.md).
+This fork's `main` is that line plus upstream through the Android app and the owner-only REA and ARTEX fold. The full
+Android app can call ARTEX directly when Misty is on. The fold is not part of the measurements above. What is still
+unproven against a live ARTEX process is [HANDOVER.md](../HANDOVER.md).
 
 ## Hub wedge, watchdog and placement (2026-11-22)
 
@@ -33,7 +33,7 @@ Run: the 27B Q5_K_XL (20.2 GB) loaded on the RX 7900 XTX twice with the new buil
 free memory minus the target. 577 library tests, clippy and the frontend tests pass. Not run: the retry ladder on the
 real card (the failures did not come back), the Models page chips in a browser, and any measurement of a CPU model and a
 GPU model at the same time. Not built: load progress for slow disks, a thread budget for a CPU and a GPU model together,
-a CPU draft model, the PrismML GPU build on Linux (open items in [HANDOVER.md](HANDOVER.md)).
+a CPU draft model, AirLLM on a model bigger than memory (`docs/airllm-spike-results.md`), the PrismML GPU build on Linux (open items in [HANDOVER.md](HANDOVER.md)).
 
 Ternary Bonsai files on the card (2026-11-23): `misty setup --install prism-gpu` installs the PrismML build with the Vulkan
 backend (29 MB, pinned). A scratch hub on the RX 7900 XTX loaded the 9B `PQ2_0` file on it (2.3 GB of VRAM, 136 tokens/s)
@@ -270,6 +270,11 @@ the flags and the PATH. End to end on the same day, a hub built with `--features
 - a chat answered correctly, with the 17.7 GB model using 6.1 GB of VRAM (3.5 tok/s on a cold start).
 
 The speed measurements are in [rigel.md](rigel.md).
+
+Rebuilt and re-run on 2026-11-24 (HIP SDK 7.2, MSVC toolset pinned to 14.44 with `MM_RIGEL_MSVC_TOOLSET`; 14.51 does not compile): the same
+30B model loaded in 10 s on 5.75 GB of VRAM and answered at 2.2 tokens/s cold and 12.0 tokens/s on a longer answer. Releases 0.4.1 and
+0.4.2 do **not** contain Rigel (built without `rigel-engine`). Plan for owning the source and the AirLLM-style hybrid:
+[rigel-hybrid-plan.md](rigel-hybrid-plan.md).
 
 ## Misty (`src/misty`, `engine = "prism"`)
 
