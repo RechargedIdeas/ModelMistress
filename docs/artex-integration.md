@@ -66,11 +66,11 @@ The library tests prove these shapes against a stand-in. They do not prove a run
 
 ## On the phone
 
-The full Android app (`com.modelmistress.app`) calls this same engine. It does not go through the paired desktop, and it does not use the desktop's owner token. In Models, under ARTEX, save `http://` and the engine's session token. They stay on the phone, in plain text, like the Hugging Face token. Misty must be on. The nine tools are then offered only when the question is about ARTEX, scope, or findings.
+The full Android app (`com.modelmistress.app`) and the router app (`com.modelmistress.router`) call this same engine. They do not go through the paired desktop, and they do not use the desktop's owner token. In Models, under ARTEX, save `http://` and the engine's session token. They stay on the phone, in plain text, like the Hugging Face token. Misty must be on. The nine tools are then offered only when the question is about ARTEX, scope, or findings.
 
-Read-only tools run at once while Tool use is On. `artex_scope_add`, `artex_control`, `artex_task_create`, and `artex_bind_model` are hub actions: they ask while Tool use is On, and they run at once while Tool use is Full auto. `artex_bind_model`'s `api_key` is still a peer key for the hub ARTEX will call. The phone does not fill that in from its own server key.
+Read-only tools run at once while Tool use is On. `artex_scope_add`, `artex_control`, `artex_task_create`, and `artex_bind_model` are hub actions: they ask while Tool use is On, and they run at once while Tool use is Full auto. On the full app, the chat asks. On the router, Allow and Refuse are on the server screen, and silence is a refusal. `artex_bind_model`'s `api_key` is still a peer key for the hub ARTEX will call. The phone does not fill that in from its own server key, and the approval line hides the key.
 
-The router app does not show these fields and does not run the tools. REA is not on either app.
+The router's served chat does not get the file tools. A client of the router still cannot send its own `tools` list; Misty runs on the phone and the client sees the finished answer. REA is not on either app.
 
 ## REA is not this
 

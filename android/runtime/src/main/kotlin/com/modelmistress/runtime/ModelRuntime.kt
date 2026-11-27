@@ -6,12 +6,17 @@ import com.modelmistress.core.chat.ChatStore
 import com.modelmistress.core.chat.FileChatStore
 import com.modelmistress.core.chat.ModelCatalog
 import com.modelmistress.core.chat.ModelRouter
+import com.modelmistress.core.fold.ServedFold
 import com.modelmistress.core.misty.FileMistyFeedback
 import com.modelmistress.core.misty.MistyFeedback
 import com.modelmistress.core.remote.CombinedCatalog
 import com.modelmistress.core.environment.EnvironmentStore
+import com.modelmistress.core.tools.ToolApproval
+import com.modelmistress.core.tools.ToolModes
+import com.modelmistress.core.tools.ToolUse
 import com.modelmistress.runtime.overlay.TransferdOverlay
 import com.modelmistress.server.ModelMistressServer
+import com.modelmistress.server.ServedChat
 import com.modelmistress.server.ServerConfig
 import java.io.File
 import java.io.IOException
@@ -74,6 +79,14 @@ class ModelRuntime private constructor(context: Context) {
     /** The owner's ratings of replies. Misty routes similar questions by them, and they are kept for training later. */
     val feedback: MistyFeedback = FileMistyFeedback(File(context.filesDir, "misty/feedback.jsonl"))
 
+    /**
+     * A hub-class tool the served chat is waiting on. The router has no chat dialog, so Allow and Refuse are on the
+     * server screen. Silence is a refusal.
+     */
+    val toolApproval = ToolApproval()
+    private val pendingToolState = MutableStateFlow<ToolApproval.Pending?>(null)
+    val pendingTool: StateFlow<ToolApproval.Pending?> = pendingToolState.asStateFlow()
+
     /** The latest device benchmark: the stress test and each model's speed on this phone. */
     val benchmarks = BenchmarkStore(File(context.filesDir, "benchmark/latest.json"))
 
@@ -82,13 +95,53 @@ class ModelRuntime private constructor(context: Context) {
 
     private var server: ModelMistressServer? = null
 
+    /**
+     * Misty for a request another app sends to this phone. Off unless the owner turned Misty on. No file tools: the
+     * request must not read the phone's files. ARTEX is included when its URL and token are saved. REA is not.
+     */
+    private val servedChat = ServedChat { backend, messages, options, keepGoing ->
+        if (!settings.mistyEnabled) return@ServedChat null
+        val reflex = if (settings.toolUse != ToolUse.OFF && misty.reflexReady(settings.mistyReflex)) {
+            NeedleReflex(needle)
+        } else {
+            null
+        }
+        ServedFold.answer(
+            chat = backend,
+            messages = messages,
+            options = options,
+            tools = ServedFold.tools(
+                deviceStatus = { misty.status() },
+                installedModels = { misty.installedModels() },
+                artexUrl = settings.artexUrl,
+                artexToken = settings.artexToken,
+            ),
+            policies = ToolModes.policies(settings.toolUse, settings.fileWrites),
+            confirm = { call -> toolApproval.ask(call) },
+            keepGoing = keepGoing,
+            feedback = feedback,
+            reflex = reflex,
+            notes = { line -> Log.i(TAG, line) },
+        )
+    }
+
+    init {
+        toolApproval.onChange = { pendingToolState.value = it }
+    }
+
     /** Starts the server with the current settings and returns the state it is in afterwards. */
     @Synchronized
     fun startServer(): ServerState {
         if (server?.isRunning == true) return state.value
         val host = if (settings.allowNetwork) "0.0.0.0" else "127.0.0.1"
         val config = ServerConfig(host = host, port = settings.port, apiKey = settings.apiKey)
-        val created = ModelMistressServer(ModelRouter(catalog), config, imageHub) { line -> Log.i(TAG, line) }
+        val created = ModelMistressServer(
+            ModelRouter(catalog),
+            config,
+            imageHub,
+            { line -> Log.i(TAG, line) },
+            servedChat,
+        )
         try {
             val port = created.start()
             server = created

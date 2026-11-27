@@ -1,10 +1,12 @@
 package com.modelmistress.server
 
 import com.modelmistress.core.chat.ApiException
+import com.modelmistress.core.chat.ChatBackend
 import com.modelmistress.core.chat.ChatMessage
 import com.modelmistress.core.chat.GenerationOptions
 import com.modelmistress.core.chat.ModelRouter
 import com.modelmistress.core.chat.OpenAi
+import com.modelmistress.core.chat.ServedAnswer
 import com.modelmistress.core.images.ImageApi
 import com.modelmistress.core.images.ImageCatalog
 import com.modelmistress.core.json.Json
@@ -30,18 +32,31 @@ data class ServerConfig(
     val maxBodyBytes: Int = 4 * 1024 * 1024,
 )
 
+/** Answers one chat in place of the plain completion. Null keeps the usual path, which does not run tools. */
+fun interface ServedChat {
+    fun answer(
+        backend: ChatBackend,
+        messages: List<ChatMessage>,
+        options: GenerationOptions,
+        keepGoing: () -> Boolean,
+    ): ServedAnswer?
+}
+
 /**
  * The OpenAI-compatible HTTP server. It binds [ServerConfig.host] and answers /v1/health, /v1/models and
  * /v1/chat/completions, streamed as server-sent events when the request asks for it, and /v1/images/generations when
  * [images] is given. When [ServerConfig.apiKey] is set,
  * every route except health needs it as a bearer token. Cross-origin browser access is deliberately not enabled, so a
  * web page cannot read replies from the device.
+ *
+ * [served], when it returns an answer, is Misty on this device. The client still does not send its own tool list.
  */
 class ModelMistressServer(
     private val router: ModelRouter,
     private val config: ServerConfig,
     private val images: ImageCatalog? = null,
     private val log: (String) -> Unit = {},
+    private val served: ServedChat? = null,
 ) : Closeable {
     private var listener: ServerSocket? = null
     private var workers: ExecutorService? = null
@@ -192,6 +207,13 @@ class ModelMistressServer(
         val route = router.resolve(parsed.model)
         val id = OpenAi.newId()
         val created = nowSeconds()
+        val folded = served?.answer(route.backend, parsed.messages, parsed.options) { true }
+        if (folded != null) {
+            if (parsed.stream) streamFolded(route.modelId, folded, id, created, writer) else {
+                writer.json(200, OpenAi.completion(id, route.modelId, created, folded.text, folded.stats))
+            }
+            return
+        }
         if (parsed.stream) {
             streamReply(route, parsed.messages, parsed.options, id, created, writer)
         } else {
@@ -238,6 +260,24 @@ class ModelMistressServer(
             writer.event(OpenAi.error("The reply failed on this device.", "server_error", "internal_error"))
         }
         if (!clientGone) writer.event("[DONE]")
+    }
+
+    /** One finished Misty reply, as a short event stream. Tool calls are not written out. */
+    private fun streamFolded(model: String, answer: ServedAnswer, id: String, created: Long, writer: HttpResponseWriter) {
+        writer.startEventStream()
+        writer.event(OpenAi.chunk(id, model, created, mapOf("role" to "assistant", "content" to ""), null))
+        try {
+            if (answer.text.isNotEmpty()) {
+                writer.event(OpenAi.chunk(id, model, created, mapOf("content" to answer.text), null))
+            }
+            writer.event(OpenAi.chunk(id, model, created, emptyMap(), answer.stats.finishReason.wire))
+        } catch (error: IOException) {
+            return
+        } catch (error: RuntimeException) {
+            log("Stream failed: ${error.message}")
+            writer.event(OpenAi.error("The reply failed on this device.", "server_error", "internal_error"))
+        }
+        writer.event("[DONE]")
     }
 
     private fun fail(writer: HttpResponseWriter, status: Int, code: String, message: String) {

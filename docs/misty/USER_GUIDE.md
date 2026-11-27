@@ -187,8 +187,8 @@ She is not handed those definitions on every request. ARTEX is offered when the 
 findings. REA is offered when it mentions reverse engineering, decompilation, disassembly, firmware, Ghidra, or an
 evidence id. The REA child is one for the whole hub. If it dies, it is not started again.
 
-The full Android app can call the nine `artex_` tools itself, when Misty is on and the phone has the engine's `http://`
-URL and session token. It does not call them through a paired desktop. REA stays on this hub. The router app has neither.
+The full Android app and the router app can call the nine `artex_` tools themselves, when Misty is on and the phone has the engine's `http://`
+URL and session token. They do not call them through a paired desktop. The router does this while answering a request, and it does not hand that request the file tools. REA stays on this hub. Neither app runs it.
 
 ```bash
 model-mistress misty tools              # every tool, its class and the policy that applies

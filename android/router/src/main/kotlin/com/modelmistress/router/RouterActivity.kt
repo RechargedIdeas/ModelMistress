@@ -31,13 +31,14 @@ class RouterActivity : ComponentActivity() {
                 ) {
                     Text("ModelMistress Router", style = MaterialTheme.typography.headlineSmall)
                     Text(
-                        "Serves the models on this device to other apps through an OpenAI-compatible API.",
+                        "Serves the models on this device to other apps. With Misty on, a request can use ARTEX. " +
+                            "REA stays on the desktop hub.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     ServerPanel(runtime)
                     HorizontalDivider()
                     Text("Models", style = MaterialTheme.typography.titleMedium)
-                    ModelsPanel(runtime)
+                    ModelsPanel(runtime, showFold = true)
                 }
             }
         }

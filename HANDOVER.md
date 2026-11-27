@@ -46,6 +46,10 @@ MM_ARTEX_URL=http://127.0.0.1:8787 MM_ARTEX_TOKEN=<token> model-mistress serve -
 
 One REA child for the hub, created on the first tool list (`OnceLock` in `src/misty/toolbox.rs`). Do not restart it after it dies. MCP still has its own child, one per `model-mistress mcp` process, and that child's evidence ids die with the process.
 
+## The phone
+
+The full app's chat and the router's `/v1/chat/completions` can call the nine `artex_` tools when Misty is on and the phone has the engine URL and token (`android/core/.../fold/ServedFold.kt`, `ModelRuntime.servedChat`). The router does not give that request the file tools. A hub-class call on the router waits for Allow or Refuse on the server screen. Do not add `rea_` tools to either app, and do not store the desktop owner token on the phone.
+
 ## Where the code is
 
 | Piece | Path |

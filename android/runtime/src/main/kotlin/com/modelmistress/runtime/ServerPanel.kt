@@ -50,6 +50,19 @@ fun ServerPanel(runtime: ModelRuntime, modifier: Modifier = Modifier) {
             if (state.running) "Server running" else "Server stopped",
             style = MaterialTheme.typography.titleMedium,
         )
+        val pending by runtime.pendingTool.collectAsState()
+        pending?.let { call ->
+            Text("Allow ${call.name}?", style = MaterialTheme.typography.titleSmall)
+            Text(call.shown(), style = MaterialTheme.typography.bodySmall)
+            Text(
+                "A request is waiting. Refuse leaves it undone. Doing nothing refuses it.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { runtime.toolApproval.answer(true) }) { Text("Allow") }
+                OutlinedButton(onClick = { runtime.toolApproval.answer(false) }) { Text("Refuse") }
+            }
+        }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         state.baseUrl?.let { Text("Base URL: $it") }
         Text("API key: $apiKey", style = MaterialTheme.typography.bodySmall)

@@ -52,8 +52,8 @@ private fun writeTraining(context: Context, runtime: ModelRuntime): File? {
  * Misty's switches, the tool and file-write modes, and Needle 3's download, on the Models screen. Misty is off until the owner
  * turns it on. Needle is fetched from its pinned revision only when the owner asks for it.
  *
- * [showFold] is the full app only. The router does not run these tools and does not show the fields. The URL and token
- * are the ARTEX engine's, not a desktop owner token.
+ * [showFold] shows the ARTEX URL and token. Both apps pass true. The router runs those tools when it answers a
+ * request. The URL and token are the ARTEX engine's, not a desktop owner token. REA is not offered on either app.
  */
 @Composable
 fun MistyPanel(
@@ -272,8 +272,7 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 }
 
 /**
- * The full app's ARTEX engine. Hidden on the router. Saving a bad URL does not store it. The token field is cleared
- * after a save and is not shown again.
+ * ARTEX on this phone. Saving a bad URL does not store it. The token field is cleared after a save and is not shown again.
  */
 @Composable
 private fun ArtexFoldFields(settings: RuntimeSettings) {
@@ -306,7 +305,7 @@ private fun ArtexFoldFields(settings: RuntimeSettings) {
         url = typedUrl
         token = ""
         saved = true
-        note = "Saved on this phone. Misty offers the ARTEX tools on the next chat, when Misty is on."
+        note = "Saved on this phone. Misty offers the ARTEX tools when Misty is on."
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -314,8 +313,10 @@ private fun ArtexFoldFields(settings: RuntimeSettings) {
         Text(
             "The task engine on your network, over plain HTTP. This token is the engine's session token. It is not " +
                 "the desktop hub's owner token and not a peer key. The phone does not speak TLS and does not follow " +
-                "redirects. A change to a task asks you while Tool use is On. REA stays on the desktop hub " +
-                "(serve --with-rea). This phone does not run it, and a paired desktop's peer key cannot call it.",
+                "redirects. The full app's chat can call it, and so can the router while it answers a request. A change " +
+                "to a task asks you while Tool use is On. On the router, Allow and Refuse are on the server screen. " +
+                "The router does not give a request the file tools. REA stays on the desktop hub (serve --with-rea). " +
+                "This phone does not run it, and a paired desktop's peer key cannot call it.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(

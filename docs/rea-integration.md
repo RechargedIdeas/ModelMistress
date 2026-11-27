@@ -35,7 +35,7 @@ Registering REA as its own MCP server still works. Prefer the single process so 
 
 ## Not on the phone
 
-The Android app does not start a REA child, and it does not offer `rea_` tools. A paired desktop's peer key cannot call them either. The desktop owner token is loopback-only, and sending it through the overlay would make the hub treat the phone as local, so the phone does not store that token. REA stays on the desktop hub: `model-mistress serve --with-rea`.
+The Android app and the router app do not start a REA child, and neither offers `rea_` tools. A paired desktop's peer key cannot call them either. The desktop owner token is loopback-only, and sending it through the overlay would make the hub treat the phone as local, so the phone does not store that token. REA stays on the desktop hub: `model-mistress serve --with-rea`.
 
 ## What this enables
 

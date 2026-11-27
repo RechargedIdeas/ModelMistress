@@ -247,7 +247,8 @@ Tried through a scratch hub on the RX 7900 XTX (23280 MiB usable VRAM, about 17 
 ## Custom fold on this fork (2026-11-27)
 
 This checkout is RechargedIdeas/ModelMistress, not LoopyLuci's. `main` now contains upstream through the Android app
-(`6242223`) plus the owner-only REA and ARTEX fold. The full Android app can call ARTEX. The router cannot.
+(`6242223`) plus the owner-only REA and ARTEX fold. The full Android app and the router can call ARTEX. REA stays on
+the desktop hub.
 
 Rules that are already decided:
 
@@ -260,8 +261,9 @@ Rules that are already decided:
   and refuses a body over 48,000 bytes whole. The goal gate, scope kinds, `task_id` (not `task`), empty-scope note,
   and the profile named ModelMistress match `src/artex.rs`. `target_gate` stays on. Credentials are refused.
 - Mutating ARTEX tools are class hub. On the phone, hub is ask while Tool use is On, auto while Full auto, and deny
-  while Off. Exec and network stay deny. The tools are added only in `ChatViewModel.turnFor`, and only when Misty is
-  on and both the URL and the token are set. The settings UI is `showFold` on the full app's Models screen.
+  while Off. Exec and network stay deny. The full app adds the tools in `ChatViewModel.turnFor`. The router adds them
+  in `ServedFold` when Misty is on and the HTTP server answers a chat. That path has no file sandbox. A hub call on
+  the router waits on `ToolApproval` (the server screen); silence refuses it. Settings are `showFold` on both apps.
 - A live ARTEX sequence is still not proven: status, bind with `--task`, task-create, scope-add, findings `--task`.
   This environment has no Go and no Postgres, so it cannot start the engine. The JVM tests are a stand-in.
 - Do not rebuild the v0.4.3 Windows installer or the Linux source archive unless the owner asks. Do not force-push.

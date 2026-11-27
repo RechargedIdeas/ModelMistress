@@ -96,6 +96,9 @@ data class GenerationStats(
     val finishReason: FinishReason,
 )
 
+/** A reply the HTTP server already finished, used when Misty answers instead of the plain completion. */
+data class ServedAnswer(val text: String, val stats: GenerationStats)
+
 fun interface TokenSink {
     /** Receives the next piece of reply text. Return false to stop generating. */
     fun onText(text: String): Boolean

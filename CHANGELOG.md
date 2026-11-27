@@ -145,7 +145,7 @@
   - *The fix.* A test build gets no machine folders; a test names the folders it needs in its settings. A test checks
   that a fresh engine's folders are all under its own home.
 
-### Full Android app: ARTEX, not the router
+### Android: ARTEX on the full app and the router
 
 - The full app's Misty can call the same nine `artex_` tools as the hub (`android/core/.../fold/`). The phone talks to the
   ARTEX engine over `http://` with the session token saved on the device. The gates match the hub: 80 bytes and a target
@@ -153,10 +153,13 @@
   and is not a second create, a body over 48,000 bytes is refused whole, gzip and redirects are refused. Read-only tools
   are class read. A call that changes a task is class hub: it asks while Tool use is On, runs while Tool use is Full
   auto, and is off while Tool use is Off. Exec and network stay off.
-- The tools are offered only when Misty is on and both the URL and the token are set, and only when the question is
-  about ARTEX, scope, or findings. The router app does not run them and does not show the fields. REA is not on the
-  phone. A desktop peer key cannot call it, and the desktop owner token is not stored here. Not yet run against a live
-  ARTEX engine.
+- The router app (`com.modelmistress.router`) uses the same tools when Misty is on and it answers `/v1/chat/completions`.
+  A request is not given the file tools. A hub-class call waits on the server screen for Allow or Refuse; silence
+  refuses it. The client still cannot send its own tool list, and it does not see the tool call.
+- The tools are offered only when Misty is on and, for ARTEX, both the URL and the token are set, and only when the
+  question is about ARTEX, scope, or findings. REA is not on either app. A desktop peer key cannot call it, and the
+  desktop owner token is not stored here. Not yet run against a live ARTEX engine. The router APK was not assembled in
+  the sandbox that wrote this: there is no Android SDK here, and the engine trees are not checked out.
 
 ## 0.4.3 — 2026-11-24
 
